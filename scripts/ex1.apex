@@ -9,12 +9,15 @@ List<Account> accounts = new List<Account> {
 LazyIterator Iterator1 = new LazyIterator(accounts);
 LazyIterator Iterator2 = new LazyIterator(accounts);
 
+// returns first matching element
 System.debug(Iterator1.find(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
 );
 
+// returns null as we already iterated over it
 System.debug(Iterator1.find(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
 );
 
+// returns map with keys 1,3,5 as we filtered out accounts with even employees
 System.debug(JSON.serializePretty(
     Iterator2
     .filter(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
