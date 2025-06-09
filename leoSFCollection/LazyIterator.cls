@@ -1,7 +1,11 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier,PMD.CyclomaticComplexity')
-global virtual class LazyIterator implements Iterator<Object> {
+global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> {
 
     public Iterator<Object> iterator;
+
+    public Iterator<Object> iterator() {
+        return this.iterator;
+    }
 
     private ContainerCreator containerCreator = new ContainerCreator();
     private LazyIteratorInjector injector = new LazyIteratorInjector();

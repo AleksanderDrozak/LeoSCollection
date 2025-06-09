@@ -61,6 +61,10 @@ global inherited sharing class Collection {
         return empty().query(function);
     }
     
+    global static LazyIterator take(Object anyInstance, Integer limitRecords) {
+        return of(anyInstance).take(limitRecords);
+    }
+
     global static Boolean every(Object anyInstance, BooleanFunction matchingFunction) {
         return of(anyInstance).every(matchingFunction);
     }
