@@ -2,551 +2,161 @@
 
 For working on iterable Apex object (e.g. Lists) with lazy-evaluated functions.
 
-For example:
+[Realistic scenarios](./examples/scenarios) | [Configuration-driven pipelines](./examples/configurable) | [Ideas](./ideas) | [Full example script](./docs/examples.md)
+
+## What it gives you
+
+A lazy pipeline over any `Iterable` (lists, SOQL results, child relationships), with prebuilt
+declarative building blocks so common SObject work does not need a hand-written function class:
+
+| Purpose | Building blocks |
+| --- | --- |
+| Entry point | `Collection.of(...)`, `Collection.query(...)`, and `Collection.template(...)` for a pipeline that is applied to data later. `Collection.ofMap(...)` enters a map that is already grouped - `of(...)` over a map iterates its keys and drops the values |
+| Filtering | `FilterByCondition`, `FilterByFieldFunction` |
+| Combining conditions | `AndFunction`, `OrFunction`, `NotFunction` |
+| Mapping | `PickByFieldFunction` (an SObject field, by token or by name) and `PickByKeyFunction` (a Map key), `SetValueFunction`, `SetValueFromFunction`, `SetMultipleValuesFunction`; `transformWithIndex` when the step depends on position |
+| Relationship traversal | `PickListApplyFunction`, `PickListIsEmptyFunction` / `PickListIsNotEmptyFunction` (usable in `filter()` as well as `transform()`), `flatMap` |
+| Aggregation | `ReduceFieldFunction.sum()` / `.min()` / `.max()` / `.average()`; `IteratorToReduceFunction` and `IteratorToCountFunction` roll a child list into a single value |
+| Grouping and sorting | `GroupByFieldFunction`, `SortByFieldFunction` (the pipeline step) or `CompareByField` (the same comparison as a standalone strategy), `AnyComparator`; `groupBy` emits keyed groups, `filterGroup` (`GroupSizeCondition`) keeps only the groups that match — the predicate is carried and applied on read, so a `take()` above it stops early — and `keySet()` / `values()` read the keys or the member lists out as a collection while `keySetLazy()` / `valuesLazy()` leave the grouped stream for an ordinary pipeline |
+| Terminal operations | `toList`, `toSet`, `toValue`, `count`, `first`, `find`, `some`, `every`; `toMap` / `toListMap` / `toDistinctList` key on a grouped stream |
+| Effects | `forEach`, `execute`, `dmlUpdate`, `query` |
+| Formula-driven steps | `FormulaFilterFunction` and `FormulaMapFunction` turn a `FormulaEval.FormulaInstance` into a filter or a mapper, so one class covers every rule whose logic is a formula instead of one class per rule. Built with Apex's own `Formula.builder()` - globals, template mode and the rest included, not re-implemented. Build the instance once and share it: `getReferencedFields()` names the inputs, so the same instance can shape a query's SELECT list and then process its rows - see [`FormulaForQueryAndProcessing`](./examples/scenarios/FormulaForQueryAndProcessing.cls) |
+| Configuration-driven steps | `pipe()` applies a list of steps, and a step is a value - so a pipeline can be assembled from Custom Metadata instead of code. A new rule costs a metadata row rather than a class - see [`examples/configurable`](./examples/configurable) |
+| Aggregate results | An aggregate is just a query: `Collection.query(...)` runs it and hands the rows back as a pipeline, so the aggregation stays in the query and only the shaping happens here. A row is a read-only SObject: a grouped field is read by token, an alias by name. `DeserializeToFunction` maps a row onto a DTO whose fields are named after the SOQL aliases, so the `(Integer) row.get('expr0')` casts disappear - see [`AggregateByCountry`](./examples/scenarios/AggregateByCountry.cls) |
+| Errors | everything throws `LeoSCollectionException`, so a single `catch` covers the library |
+
+Most steps returning a `LazyIterator` are lazy: no work happens until a terminal operation runs. The two that need every record before they can emit anything - `sortBy` and `groupBy` - do their work when they are called, not on the first read, so a pipeline carrying them pays that cost at the call site rather than as a stall inside an unrelated step.
 
 ```java
-List<Account> accounts = new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 1),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 2),
-    new Account(Name ='ACME', NumberOfEmployees = 3),
-    new Account(Name ='ACME', NumberOfEmployees = 4),
-    new Account(Name ='ACME', NumberOfEmployees = 5)
-};
-
-List<Account> accounts2 = new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 1),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 2),
-    new Account(Name ='ACME', NumberOfEmployees = 3)
-};
-
-List<List<Account>> nestedAccounts = new List<List<Account>> {
-    accounts,
-    accounts,
-    accounts
-};
-
-List<List<Account>> nestedAccounts2 = new List<List<Account>> {
-    accounts,
-    accounts
-};
-
-List<Account> accountsWithContacts = (List<Account>) JSON.deserialize('[{"Name":"Test Account","Contacts":{"totalSize":5,"done":true,"records":[{"FirstName":"Andreas","LastName":"Vikerup"},{"FirstName":"Thomas","LastName":"Peterson"},{"FirstName":"Dominik","LastName":"Stronk"},{"FirstName":"Peter","LastName":"Bat"},{"FirstName":"Randome","LastName":"User"}]}}]', List<Account>.class);
-
-List<Account> accountsWithOpportunities =  (List<Account>) JSON.deserialize('[{"Name":"Test Account","Opportunities":{"totalSize":3,"done":true,"records":[{"attributes":{"type":"Opportunity"},"StageName":"Closed Lost","CloseDate":"2023-03-08","Amount":1000},{"attributes":{"type":"Opportunity"},"StageName":"Closed Won","CloseDate":"2023-03-08","Amount":2000},{"attributes":{"type":"Opportunity"},"StageName":"Closed Won","CloseDate":"2022-03-08","Amount":3000},{"attributes":{"type":"Opportunity"},"StageName":"Closed Won","CloseDate":"2023-03-08","Amount":4000}]}}]', List<Account>.class);
-
-List<Account> accountsToAddPhone = new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 5, AnnualRevenue = 1.2),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.3),
-    new Account(Name ='ACME', NumberOfEmployees = 3, AnnualRevenue = 1.5),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.1),
-    new Account(Name ='ACME', NumberOfEmployees = 1, AnnualRevenue = 1)
-};
-
-LazyIterator Iterator1 = new LazyIterator(accounts);
-LazyIterator Iterator2 = FilterOddNumberOfAccountsIterator.getInstance(accounts);
-LazyIterator Iterator3 = MappedNumberOfEmployeesIterator.getInstance(accounts);
-LazyIterator Iterator4 = SumNumberOnAccounts.getInstance(accounts);
-LazyIterator Iterator5 = SumNumberOnAccounts.getInstance(accounts);
-LazyIterator Iterator6 = GroupByNameAccounts.getInstance(accounts);
-LazyIterator Iterator7 = new LazyIterator(accounts);
-LazyIterator Iterator8 = new LazyIterator(accounts);
-LazyIterator Iterator9 = new LazyIterator(nestedAccounts);
-LazyIterator Iterator10 = new LazyIterator(nestedAccounts);
-LazyIterator Iterator11 = new LazyIterator(nestedAccounts);
-LazyIterator Iterator12 = new LazyIterator(accounts);
-LazyIterator Iterator13 = new LazyIterator(accounts);
-LazyIterator Iterator14 = new LazyIterator(accounts);
-LazyIterator Iterator15 = new LazyIterator(accounts);
-LazyIterator Iterator16 = new LazyIterator(accounts);
-LazyIterator Iterator17 = new LazyIterator(accounts);
-LazyIterator Iterator18 = new LazyIterator(accounts);
-LazyIterator Iterator19 = new LazyIterator(accounts);
-LazyIterator Iterator20 = new LazyIterator(accounts);
-LazyIterator Iterator21 = new LazyIterator(accounts);
-LazyIterator Iterator22 = new LazyIterator(accounts);
-LazyIterator Iterator23 = new LazyIterator(accounts);
-LazyIterator Iterator24 = new LazyIterator(accounts);
-
-System.debug(JSON.serializePretty(Iterator1.toListMap(Account.class)));
-System.debug(JSON.serializePretty(Iterator2.toList(Account.class)));
-System.debug(JSON.serializePretty(Iterator3.toMap(Integer.class)));
-System.debug(JSON.serializePretty(Iterator4.toMap(Integer.class)));
-System.debug(Iterator5.toValue());
-System.debug(JSON.serializePretty(Iterator6.toListMap(Account.class)));
-System.debug(Iterator7.some(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd()));
-System.debug(Iterator8.every(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd()));
-System.debug(Iterator9.flat().toList(Account.class).size());
-System.debug(
-    Iterator10.flat()
-    .groupBy(new GroupByNameAccounts.GroupByNameFunction())
-    .toListMap(Account.class)
-);
-System.debug(
-    Iterator11.flat()
-    .filter(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
-    .reduce(new SumNumberOnAccounts.SumNumberOfEmployees())
-    .toValue()
-);
-
-System.debug(Iterator12.filter(
-                 new FilterByFieldFunction()
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 2)
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 3)
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 4)
-                 .setExpression('(1 AND 2) OR (3 AND 4)')
-                 .evaluate()
-)
-             .toList(Account.class)
-);
-
-System.debug(Iterator13
-             .transform(new PickByFieldFunction(Account.NumberOfEmployees))
-             .toList(Integer.class)
-);
-
-System.debug(Iterator14
-             .find(
-                 new FilterByFieldFunction()
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)
-                 .evaluate()
-             )
-);
-
-System.debug(Iterator15
-             .find(
-                 new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd()
-             )
-);
-
-System.debug(
-    Iterator16
-    .groupBy(new GroupByFieldFunction(Account.NumberOfEmployees))
-    .toMap(Account.class)
-);
-
-System.debug(
-    Iterator17
-    .reduce(new SumFieldFunction(Account.NumberOfEmployees))
-    .toValue()
-);
-
-System.debug(
-    Iterator18
-    .reduce(new AvarageFieldFunction(Account.NumberOfEmployees))
-    .toValue()
-);
-
-System.debug(
-    Iterator19
-    .filter(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
-    .count()
-);
-
-System.debug(
-    Iterator20
-    .reduce(new MinFieldFunction(Account.NumberOfEmployees))
-    .toValue()
-);
-
-System.debug(
-    Iterator21
-    .reduce(new MaxFieldFunction(Account.NumberOfEmployees))
-    .toValue()
-);
-
-/** same implementation as for iterator 12 - its about 30% faster */
-System.debug(Iterator22.filter(
-                 new AndFunction(
-                     new AndFunction(
-                         new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5),
-                         new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 2)
-                     ),
-                     new AndFunction(
-                         new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 3),
-                         new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 4)
-                     )
-                 )
-)
-             .toList(Account.class)
-);
-
-System.debug(Iterator23.filter(
-                 new NotFunction(
-                     new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)
-                 )
-)
-             .toList(Account.class)
-);
-
-System.debug(Iterator24.filter(
-                 new OrFunction(
-                     new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5),
-                     new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 3)
-                 )
-)
-             .toList(Account.class)
-);
-
-/** Every operation from LazyIterator can be done using Collection class eg */
-System.debug(Collection.of(accounts).find(
-                 new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)
-)
-);
-
-/** even shorter */
-System.debug(Collection.find(accounts, new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)));
-
-/** with other methods */
-System.debug(Collection.some(accounts, new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)));
-
-/** also returning lazy iterator */
-System.debug(Collection.filter(
-                 accounts, new FilterByCondition(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 5)
-).toList(Account.class)
-);
-
-/** sorting logic from Lazy iterator sort by call using AnyComparator with ascending order which are defaults */
-System.debug(Collection.of(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }).sortBy().toList(Integer.class));
-
-/** same here using AnyComparator which is default with set descending order */
-System.debug(Collection.of(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }).sortBy(SortUtil.SORTING_ORDER.DESCENDING).toList(Integer.class));
-
-/** same here shorter without of function, using AnyComparator with descending order set by param */
-System.debug(Collection.sortBy(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }, new AnyComparator().setDescending()).toList(Integer.class));
-
-/** sorting logic for Lazy iterator (works from collection static also) with declared sorting function (faster then AnyComparator by 20%) with default descending order */
-System.debug(Collection.sortBy(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }, new NumberComparator().setDescending()).toList(Integer.class));
-
-System.debug(
-    Collection.of(new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 3),
-    new Account(Name ='ACME', NumberOfEmployees = 2),
-    new Account(Name ='ACME', NumberOfEmployees = 5),
-    new Account(Name ='ACME', NumberOfEmployees = 1)
-})
-    .sortBy(new SortByFieldFunction(Account.NumberOfEmployees, Decimal.class))
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.sortBy(new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.2),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.3),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.5),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.1),
-    new Account(Name ='ACME', NumberOfEmployees = 1, AnnualRevenue = 1)
-}, new SortByFieldFunction(Account.AnnualRevenue).setDescending())
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.wrap(new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.2),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.3),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.5),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.1),
-    new Account(Name ='ACME', NumberOfEmployees = 1, AnnualRevenue = 1)
-}, new AccountWrapper())
-    .toList(AccountWrapper.class)
-);
-
-System.debug(Collection.transform(new List<Account> {
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.2),
-    new Account(Name ='NOT ACME', NumberOfEmployees = 4, AnnualRevenue = 1.3),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.5),
-    new Account(Name ='ACME', NumberOfEmployees = 2, AnnualRevenue = 1.1),
-    new Account(Name ='ACME', NumberOfEmployees = 1, AnnualRevenue = 1)
-}, new ConvertFunction(Contact.class, new Map<SObjectField, SObjectField> {
-    Contact.Name => Account.Name,
-    Contact.Salutation => Account.NumberOfEmployees
-}))
-             .toList(Contact.class)
-);
-
-System.debug(
-    Collection.flatMap(
-        accountsWithContacts, new PickListByFieldFunction(Contact.AccountId)
-    ).toList(Contact.class)
-);
-
-LazyIterator reusableIterator = Collection.nil()
-                                .flat()
-                                .filter(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
-                                .reduce(new SumNumberOnAccounts.SumNumberOfEmployees());
-
-System.debug(reusableIterator.apply(nestedAccounts).toValue());
-System.debug(reusableIterator.apply(nestedAccounts2).toValue());
-
-List<Account> accountsToAddPhone1 = accountsToAddPhone.deepClone();
-
-Collection.transform(
-    accountsToAddPhone1, new SetValueFunction(Account.Phone, '+12 123-123-123')
-).execute();
-
-System.debug(accountsToAddPhone1);
-
-List<List<Account>> nestedAccountsToAddPhone = new List<List<Account>> {
-    accountsToAddPhone.deepClone(),
-                    accountsToAddPhone.deepClone()
-};
-
-/** works also with Collection.of(nestedAccountsToAddPhone).pipe(... */
-Collection.pipe(nestedAccountsToAddPhone, new List<Object> {
-    /** function do nothing, only placed to inform pipe function that we want to apply flattening */
-    new FlattenFunction(),
-    new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd(),
-    new SetValueFunction(Account.Phone, '+12 123-123-123')
-})
-.execute();
-
-System.debug(JSON.serializePretty(nestedAccountsToAddPhone));
-
-System.debug(
-    Collection.pipe(accounts, new List<Object> {
-    new ConvertFunction(Contact.class, new Map<SObjectField, SObjectField> {
-        Contact.Name => Account.Name,
-        Contact.Salutation => Account.NumberOfEmployees
-    }),
-    new GroupByFieldFunction(Contact.Name)
-}
-    )
-    .toDistinctList(Contact.class)
-);
-
-System.debug(
-    Collection.of(accounts)
-    .transform(
-        new SetValueConditionallyFunction(
-            Account.Phone,
-            new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd(),
-            '+12 123-123-123'
-        )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.of(accounts)
-    .transform(new SetMultipleValuesFunction
-               (
-                   new Map<SObjectField, Object>
-                   { Account.Phone => '+12 123-123-123',
-                     Account.Website => 'some.website.com' }
-               )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.pipe(accountsWithContacts, new List<Object> {
-    new PickListByFieldFunction(Contact.AccountId),
-    /** function do nothing, only placed to inform pipe function that we want to apply flattening */
-    new FlattenFunction(),
-    new SetValueFunction(Contact.Phone, '+12 123-123-123')
-})
-    .toList(Contact.class)
-);
-
-System.debug(
-    Collection.pipe(accountsWithContacts, new List<Object> {
-    new LoggerFunction(),
-    new PickListByFieldFunction(Contact.AccountId),
-    new LoggerFunction(),
-    /** function do nothing, only placed to inform pipe function that we want to apply flattening */
-    new FlattenFunction(),
-    new LoggerFunction(),
-    new SetValueFunction(Contact.Phone, '+12 123-123-123'),
-    new LoggerFunction()
-})
-    .toList(Contact.class)
-);
-
-System.debug(
-    Collection.pipe(
-        accounts,
-        new List<Object> { new LimitToFunction(3) }
-    )
-    .count()
-);
-
-System.debug(
-    Collection.of(accounts)
-    .take(2)
-    .count()
-);
-
-System.debug(
-    Collection.empty()
-    .firstOrDefault(accounts.get(0))
-);
-
-Collection.of(accounts).forEach(new LoggerFunction());
-
-System.debug(
-    Collection.query(new QueryFirstAccount())
-    .transform(new SetValueFunction(Account.Name, 'Acme Test'))
-    .dmlUpdate(new DefaultDmlUpdateFunction())
-);
-
-
-System.debug(
-    Collection.of(accounts)
-    .pipe(new List<Object> {
-    new SetValueFunction(
-        Account.Phone,
-        '+12 234 567 890'
-    ),
-    new SetValueFunction(
-        Account.BillingStreet,
-        'Test Street'
-    ),
-    new SetValueFunction(
-        Account.BillingCity,
-        'Test City'
-    ),
-    new SetValueFromFunction(
-        Account.Fax,
-        new PickByFieldFunction(Account.Phone)
-    ),
-    new SetValueFromFunction(
-        Account.Name,
-        new ConcatFunction(
-            new PickByFieldFunction(Account.BillingStreet),
-            new ConstantMapFunction(' '),
-            new PickByFieldFunction(Account.BillingCity)
-        )
-    ),
-    new SetValueFromFunction(
-        Account.Phone,
-        new ReduceMapFunction(
-            new PickByFieldFunction(Account.Phone),
-            new RegexReplaceFunction(' ', '-')
-        )
-    )
-}).toList(Account.class)
-);
-
-Datetime beginingOfTheYear = Datetime.now().addDays(-Datetime.now().dayOfYear());
-System.debug(
-    Collection.of(accountsWithOpportunities).transform(
-        new SetValueFromFunction(
-            Account.AnnualRevenue,
-            new PickListApplyFunction(
-                Opportunity.AccountId,
-                new List<Object>
-                { new FilterByCondition(
-                      Opportunity.CloseDate,
-                      ComparationUtil.Comparators.GREATER_OR_EQUALS,
-                      beginingOfTheYear
-                  ),
-                  new FilterByCondition(
-                      Opportunity.CloseDate,
-                      ComparationUtil.Comparators.LESS_OR_EQUALS,
-                      Datetime.now()
-                  ),
-                  new FilterByCondition(
-                      Opportunity.StageName,
-                      ComparationUtil.Comparators.EQUALS,
-                      'Closed Won'
-                  ),
-                  new SumFieldFunction(Opportunity.Amount) }
-            )
-        )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.of(accountsWithOpportunities).transform(
-        new SetValueFromFunction(
-            Account.Name,
-            new ConcatFunction(
-                new ConstantMapFunction('Has Closed Won Opportunites: '),
-                new PickListApplyFunction(
-                    Opportunity.AccountId,
-                    new List<Object> { new FilterByCondition(
-                                           Opportunity.StageName,
-                                           ComparationUtil.Comparators.EQUALS,
-                                           'Closed Won'
-                                       ) },
-                    new IteratorToIsNotEmpty()
-                )
-            )
-        )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.of(accountsWithOpportunities).transform(
-        new SetValueFromFunction(
-            Account.Name,
-            new ConcatFunction(
-                new ConstantMapFunction('Has Closed Won Opportunites: '),
-                new PickListIsNotEmptyFunction(
-                    Opportunity.AccountId,
-                    new List<Object> { new FilterByCondition(
-                                           Opportunity.StageName,
-                                           ComparationUtil.Comparators.EQUALS,
-                                           'Closed Won'
-                                       ) }
-                )
-            )
-        )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.of(accountsWithOpportunities).transform(
-        new SetValueFromFunction(
-            Account.Name,
-            new ConcatFunction(
-                new ConstantMapFunction('Has No Opportunites: '),
-                new PickListApplyFunction(
-                    Opportunity.AccountId,
-                    new IteratorToIsEmpty()
-                )
-            )
-        )
-    )
-    .toList(Account.class)
-);
-
-System.debug(
-    Collection.of(accountsWithOpportunities).transform(
-        new SetValueFromFunction(
-            Account.Name,
-            new ConcatFunction(
-                new ConstantMapFunction('Has No Opportunites: '),
-                new PickListIsEmptyFunction(
-                    Opportunity.AccountId
-                )
-            )
-        )
-    )
-    .toList(Account.class)
-);
+/** terminal operations return List<Object> - Apex erases generics on static methods, so cast once at the end */
+List<Account> accounts = (List<Account>) Collection.of([SELECT Id, Name, NumberOfEmployees FROM Account])
+    .filter(FilterByCondition.includes(Account.Name, 'Acme'))
+    .transform(new SetValueFunction(Account.Phone, '+12 123-123-123'))
+    .sortBy(new SortByFieldFunction(Account.Name))
+    .toList(Account.class);
 ```
 
+### Before you reach for this
+
+The library pays off when a step is a **shape change** - flattening a relationship, grouping,
+projecting one object onto another, rolling a child list into one value - over data already in hand.
+It loses when a step is a per-record rule over plain data, because Apex has no lambdas and a
+`BooleanFunction` then adds a class where an `if` was enough.
+
+See [`NotEveryJobIsAPipeline.cls`](./examples/scenarios/NotEveryJobIsAPipeline.cls) for the job that
+was deliberately written without the library, and [`docs/dx-review.md`](./docs/dx-review.md) for the
+audit behind that rule.
+
+#### When to use standard Salesforce instead
+
+That rule is one case of a larger one: **if the platform can do it, let the platform do it.** Reach for
+this library for the work that is left over after the query has done its part — never for work the
+query could have done.
+
+| The job | Do this instead |
+| --- | --- |
+| Filtering, ordering or limiting records that are in the database | `WHERE` / `ORDER BY` / `LIMIT` in the SOQL. The library cannot push a predicate down, so filtering after the query reads and discards rows the database could have skipped — and the row limit is spent before your filter runs. |
+| Counting, summing, or aggregating across records | A SOQL aggregate query, `ROLLUP`, or a roll-up summary field. `ReduceFieldFunction` is for values already in memory, not a replacement for a roll-up the platform maintains for free. |
+| A per-record rule over plain data (a number, a string, a boolean) | A plain `if`. A `BooleanFunction` adds a class where an `if` was enough — the cost this library cannot pay back. |
+| Reshaping an inbound JSON or XML payload into typed objects | **DataWeave in Apex**, which exists for this: defaults, coercion and validation in one declarative script, rather than `JSON.deserialize` plus hand-written inner classes. Reasoning and caveats in [`docs/dx-review.md`](./docs/dx-review.md#dataweave-the-idea-that-changes-the-positioning). |
+| Work over records the database cannot see yet | **This library.** `Trigger.new`, the rows of an import file, a payload just parsed — no SOQL reaches them, and that is where a lazy pipeline over data in hand earns its keep. |
+| A named, reusable, data-driven shape change over records in hand | **This library.** Flattening a relationship, grouping by a field, projecting one object onto another, rolling a child list into one value — steps with a name, applicable to any number of data sets through a template's `apply()`. |
+
+The honest summary: this library is for the gap the platform leaves, and that gap is smaller than a
+collection API makes it look.
+
+#### Limits found while writing the examples
+
+Each of these was found by writing a realistic example and then trying to break it. They are the
+reasons the examples above are the ones that exist.
+
+| Limit | Consequence |
+| --- | --- |
+| The child-list steps (`PickListApplyFunction`, `flatMap(new PickByFieldFunction(rel))`) need a populated relationship, and `SObject.putSObjects()` does not exist - children can only be loaded by a query. | If the children are in the database, the aggregate the step computes is usually expressible as a SOQL aggregate too, and SOQL wins. What is left is the case where the query cannot express the rule, or the records are not in the database at all. |
+| `ReduceFieldFunction` reads SObject fields (`reduceValue(Decimal, SObject)`). | There is no prebuilt reducer for plain or payload data, so `reduce` over a payload class needs a hand-written `ReduceFunction`. |
+| `SetValueFromFunction(field, mapper)` hands the mapper the whole record, not the field value. | Pairing it with `RegexReplaceFunction` needs a `ComposeMapFunction` extractor in front, and there is no prebuilt step that applies a mapper conditionally on a null guard. |
+| `toMap`, `toListMap` and `toDistinctList` need a key per element, which only a grouped stream - or a custom iterator overriding `nextKey()` - has. | They are terminals of the grouping family, not general-purpose conversions: on a flat stream they throw rather than quietly return a single-entry map. |
+| `filterGroup` / `keySet()` / `values()` / `keySetLazy()` / `valuesLazy()` exist on `LazyGroupByIterator` only. | They are reachable after `groupBy()`, not on an arbitrary `LazyIterator`. `filterGroup` drops whole groups — it does not thin the members inside one. `keySet()` / `values()` hand back a collection (`toMap(...).keySet()` / `.values()` give the same set and list, but only after the map is built). `keySetLazy()` / `valuesLazy()` hand back a plain `LazyIterator`, so the grouped stream ends there — they are the form to chain on (`.valuesLazy().flat()`). |
+| `ComparationUtil`'s `INCLUDES` / `NOT_INCLUDES` are dispatched before the null handling, so the value is stringified. | `includes(null, '@')` is false by luck; `includes(null, 'u')` is true. Prefer an explicit `NOT_EQUALS null`. |
+
 Fork and inspiration from :
+
 - https://nebulaconsulting.co.uk/insights/using-lazy-evaluation-to-write-salesforce-apex-code-without-for-loops
   Ideas for functions:
 - https://ramdajs.com/docs/#promap
 - https://laravel.com/docs/9.x/collections
 
 ### Open Ideas
+
 - [implement ideas](./ideas)
 
+### Iteration contract
+
+Every `LazyIterator` honours the standard `Iterator` contract: `hasNext()` is idempotent and never
+consumes an element, and the counter behind `take(n)` advances in `next()`, not in `hasNext()`.
+Calling `hasNext()` any number of times before `next()` is safe. `next()` also works without a
+preceding `hasNext()`.
+
+A **template** is a pipeline with no source: it holds the steps and nothing else, so building one is a
+deliberate act and it stays inert until `apply(data)` hands it a source. `apply()` rebuilds the pipeline
+on the new data instead of mutating anything, so a template can be applied to any number of data sets,
+in any order, and each application starts from a clean state:
+
+```java
+TemplateIterator reusable = Collection.template(new List<Object> {
+    new FlattenFunction(),
+    new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd(),
+    ReduceFieldFunction.sum(Account.NumberOfEmployees)
+});
+
+System.debug(reusable.apply(nestedAccounts).toValue());
+System.debug(reusable.apply(nestedAccounts2).toValue());
+/** still correct, because applying a template does not consume or corrupt it */
+System.debug(reusable.apply(nestedAccounts).toValue());
+```
+
+A template's only step entry is `pipe(steps)` - every step is a value, and a list of values covers the
+rest - so the step-by-step methods stay on the `LazyIterator` that actually runs.
+
+### Tests
+
+Apex tests live in `leoSFCollection/tests`. Run them against an org to verify the iteration
+contract, comparator ordering and the SObject helpers:
+
+```
+sf apex run test --test-level RunLocalTests --wait 10 --result-format human --code-coverage
+```
+
 ### TODO's:
+
+- [DX review](./docs/dx-review.md) - audit of the API surface, with the fixes worth making (missing
+  rollup functions, missing position access, and why the sort comparators were reduced to one)
+
+- DataWeave in Apex: looked at as a way to get real lambdas, and rejected as an engine - the
+  reasoning is in [the DX review](./docs/dx-review.md#dataweave-the-idea-that-changes-the-positioning).
+  Worth revisiting only for payload shaping at the edge, and only after checking whether a trigger
+  can call it.
+
+- Fixes worth making, in the order they cost the reader something:
+  - A `ReduceFunction` over plain values. `ReduceFieldFunction` reads SObject fields, so a payload
+    class cannot be reduced at all.
+  - `SetValueFromFunction` hands the mapper the record, not the field value, and nothing applies a
+    mapper conditionally on a null guard. A `SetValueFromFunction(field, extractor, mapper)` shape, or
+    an explicit note, would save the next reader the `ComposeMapFunction` detour.
+  - A `sortBy(MapFunction keyExtractor)` overload. Sorting by a key would then cover
+    `SortByFieldFunction` and `CompareByField` in one class, and a *computed* sort key - including one
+    from a formula - would become possible at all.
+- Namespace: `sfdx-project.json` has `"namespace": ""`, so the `public` constructors on `global` classes
+  (`PickListApplyFunction`, `PickListIsEmptyFunction`, `PickListIsNotEmptyFunction`, `ConcatFunction`,
+  `ConstantMapFunction`, `RegexReplaceFunction`) are reachable today. Adding a namespace before packaging
+  makes every one of them unreachable from consumer code. `ContainerCreator` and `LazyIteratorInjector`
+  are not `global` either.
 - REVERT toMap / toListMap to have String as a key, because apex not works with casting...
 - Refactor LazySortIterator, list of issues and proposals:
-  - [Issue] equal value in sorting algorithm to fix issues with two field sorting (debug two functions sorting) - (SortByFieldFunction), sorting not working properly when we have to sorting methods applied to single  
+  - [Issue] equal value in sorting algorithm to fix issues with two field sorting (debug two functions sorting) - (SortByFieldFunction), sorting not working properly when we have to sorting methods applied to single
   - [Proposal]- implement logic to allow pass list of sorting functions instead of single
   - [Proposal] - remove LazySortIterator and replace its functionality with just method that sorts data and results with new LazyIterator that contains sorted data, it will be more predictable (as well can be implemented option to pass multiple sorting functions)
 - universal Map iterable wrapper to allow transformation on maps
 - append/prepend method to allow extending number of iterable elements (multiple iterable elements without losing performance),
-- remove compare functions for every type, because improved AnyCompare works in almost same speed as them
 - remove requirement for passing type to conversion method
+- `dmlUpdate` and `query` make a pipeline impure; consider separating terminal effects from pure transformations

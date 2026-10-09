@@ -1,11 +1,13 @@
 public without sharing class LazyIteratorInjector {
 
-    class LazyIteratorInjectorException extends Exception {}
-
-    private LazyIterator injectFunction(LazyIterator iterator, Object function) {
+    private LazyIterator injectFunction(LazyIterator iterator, Object function, Integer index) {
 
         if(function instanceof BooleanFunction) {
             return new LazyFilterIterator(iterator, (BooleanFunction) function);
+        }
+
+        if(function instanceof IndexedMapFunction) {
+            return new LazyMapWithIndexIterator(iterator, (IndexedMapFunction) function);
         }
 
         if(function instanceof MapFunction) {
@@ -40,33 +42,24 @@ public without sharing class LazyIteratorInjector {
             return new LazyLimitIterator(iterator, (LimitFunction) function);
         }
 
-        throw new LazyIteratorInjectorException('Not implemented function type!' + String.valueOf(function));
+        /** Apex cannot type-check a List<Object> at compile time and has no reflection for a class name,
+            so the index is the part that actually locates the mistake in the caller's list literal. */
+        throw new LeoSCollectionException(
+            'Element ' + index + ' of the pipe is not a recognised pipeline step: ' + String.valueOf(function)
+            + '. Expected one of MapFunction, IndexedMapFunction, BooleanFunction, ReduceFunction, SortByFunction, '
+            + 'GroupByFunction, FlatFunction, WrapperFunction, Function, LimitFunction.'
+        );
     }
 
     public LazyIterator injectFunctions(LazyIterator iterator, List<Object> functions) {
 
+        Integer index = 0;
+
         for(Object function : functions) {
-            iterator = this.injectFunction(iterator, function);
+            iterator = this.injectFunction(iterator, function, index);
+            index++;
         }
 
         return iterator;
-    }
-
-    /**
-     * @descrition inject data to current instance of iterator, so any operation can be done on that set of data, so already setup Lazy Iterator can be reused.
-     * @explanation General purpose of this method is to find first lazy iterator and replace its iterator field with current data iterator, so when one of method that evealuates lazy iterator will run, be executed on data passed as argument to apply instead of initialy applied data durring creation of first Lazy Iterator. Is not recommended to use on any Lazy Iterator that had initially passed data to iterate, because it might affect that.
-     */
-    public LazyIterator injectData(LazyIterator iterator, Object data) {
-        Object currentLazyIterator = iterator;
-        Object currentLazyIteratorIterator = ((LazyIterator) currentLazyIterator).iterator;
-
-        while(currentLazyIteratorIterator instanceof LazyIterator) {
-            currentLazyIterator = currentLazyIteratorIterator;
-            currentLazyIteratorIterator = ((LazyIterator) currentLazyIteratorIterator).iterator;
-        }
-
-        ((LazyIterator) currentLazyIterator).iterator = ((Iterable<Object>) data).iterator();
-
-        return iterator.clone();
     }
 }

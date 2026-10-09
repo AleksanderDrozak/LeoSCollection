@@ -85,20 +85,24 @@ global inherited sharing class ConvertFunction implements MapFunction {
 
     private Transformer transformer;
 
+    /**
+     * Defaults to the field-by-field copy. Pass useJsonCopy = true when the mapped value types need
+     * coercion into the target field types, accepting a JSON round trip per record as the cost.
+     */
     global ConvertFunction(Type targetType, Map<SObjectField, SObjectField> targetKeyToSourceField) {
-        this(targetType, targetKeyToSourceField, true);
+        this(targetType, targetKeyToSourceField, false);
     }
 
-    global ConvertFunction(Type targetType, Map<SObjectField, SObjectField> targetKeyToSourceField, Boolean isTypeSafeTransform) {
-        this(targetType, getMappingsToFunction(targetKeyToSourceField), isTypeSafeTransform);
+    global ConvertFunction(Type targetType, Map<SObjectField, SObjectField> targetKeyToSourceField, Boolean useJsonCopy) {
+        this(targetType, getMappingsToFunction(targetKeyToSourceField), useJsonCopy);
     }
 
     global ConvertFunction(Type targetType, Map<SObjectField, MapFunction> targetKeyToSourceMapFunction) {
-        this(targetType, targetKeyToSourceMapFunction, true);
+        this(targetType, targetKeyToSourceMapFunction, false);
     }
 
-    global ConvertFunction(Type targetType, Map<SObjectField, MapFunction> targetKeyToSourceMapFunction, Boolean isTypeSafeTransform) {
-        this.transformer = isTypeSafeTransform ?
+    global ConvertFunction(Type targetType, Map<SObjectField, MapFunction> targetKeyToSourceMapFunction, Boolean useJsonCopy) {
+        this.transformer = useJsonCopy ?
                            (Transformer) new TransformByJson(targetType, targetKeyToSourceMapFunction) :
                            (Transformer) new TransformBySobject(targetType, targetKeyToSourceMapFunction);
     }

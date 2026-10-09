@@ -1,29 +1,17 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
-global inherited sharing class SortByFieldFunction extends ComparatorBase {
+global inherited sharing class SortByFieldFunction extends CompareByField {
 
-    private SobjectByFieldComparator compareFunction;
-    
-    global SortByFieldFunction(SObjectField sortByField, Type compareType) {
-        this.compareFunction = new SobjectByFieldComparator(sortByField, compareType);
-    }
-
+    /**
+     * The pipeline step, and nothing more: the comparison is entirely CompareByField's. Two names for one
+     * behaviour on purpose, so a pipeline reads as a pipeline and a comparator reads as a comparator -
+     * named after the field it reads, like FilterByFieldFunction and GroupByFieldFunction beside it.
+     */
     global SortByFieldFunction(SObjectField sortByField) {
-        Type compareType = Type.forName(String.valueOf(sortByField.getDescribe().getSoapType()));
-        this.compareFunction = new SobjectByFieldComparator(sortByField, compareType);
+        super(sortByField);
     }
 
-    global SortByFieldFunction(SobjectByFieldComparator compareFunction) {
-        this.compareFunction = compareFunction;
-    }
-
-    global override SortByFunction setOrder(SortUtil.SORTING_ORDER sortingOrder) { 
-        super.setOrder(sortingOrder);
-        this.compareFunction.setOrder(sortingOrder);
-        return this;
-    }
-
-    global override Integer compare(Object compareFrom, Object compareTo) {
-        // TODO implement when equal and more robust sort by two conditions
-        return this.compareFunction.compare(compareFrom, compareTo);
+    /** by API name, so an AggregateResult alias can be sorted the same way a record field is */
+    global SortByFieldFunction(String sortByFieldName) {
+        super(sortByFieldName);
     }
 }

@@ -10,20 +10,9 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
     private ContainerCreator containerCreator = new ContainerCreator();
     private LazyIteratorInjector injector = new LazyIteratorInjector();
 
-    private LazyIterator currentInstance {
-        get {
-
-            if(this.currentInstance == null) {
-                this.currentInstance = instance();
-            }
-
-            return this.currentInstance;
-        }
-        private set;
-    }
-
+    /** empty source rather than a null iterator: a pipeline over no rows is still a pipeline, and toList() must hand back an empty list rather than a null pointer */
     global LazyIterator() {
-        this.iterator = null;
+        this.iterator = new List<Object>().iterator();
     }
 
     global LazyIterator(Iterable<SObject> iterableInstance) {
@@ -39,10 +28,6 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
         this.iterator = iterator;
     }
 
-    protected virtual LazyIterator instance() {
-        return this;
-    }
-
     global virtual Boolean hasNext() {
         return this.iterator.hasNext();
     }
@@ -51,16 +36,24 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
         return this.iterator.next();
     }
 
+    /**
+     * A key per element, for the map terminals below. The base stream has none - only a grouped stream, or a
+     * custom iterator that overrides this, does. Answering with a placeholder is what made a flat toMap() or
+     * toListMap() quietly collapse the whole stream into a single 'key' entry, so it refuses instead.
+     */
     global virtual String nextKey() {
-        return 'key';
+        throw new LeoSCollectionException(
+            'This stream carries no key per element: toMap(), toListMap() and toDistinctList() need a grouped '
+            + 'stream - call groupBy() before them.'
+        );
     }
 
     global virtual List<Object> toList(Type dataType) {
 
         List<Object> returnVal = this.containerCreator.getList(dataType);
 
-        while(this.currentInstance.hasNext()) {
-            returnVal.add(this.currentInstance.next());
+        while(this.hasNext()) {
+            returnVal.add(this.next());
         }
 
         return returnVal;
@@ -70,8 +63,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
         Set<Object> returnVal = this.containerCreator.getSet(dataType);
 
-        while(this.currentInstance.hasNext()) {
-            returnVal.add(this.currentInstance.next());
+        while(this.hasNext()) {
+            returnVal.add(this.next());
         }
 
         return returnVal;
@@ -92,8 +85,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
         Map<String, Object> returnVal = this.containerCreator.getMap(keyType, dataType);
 
-        while(this.currentInstance.hasNext()) {
-            returnVal.put(this.currentInstance.nextKey(), this.currentInstance.next());
+        while(this.hasNext()) {
+            returnVal.put(this.nextKey(), this.next());
         }
 
         return returnVal;
@@ -107,14 +100,14 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
         Map<String, List<Object>> returnVal = this.containerCreator.getMapOfLists(keyType, dataType);
 
-        while(this.currentInstance.hasNext()) {
-            String key = this.currentInstance.nextKey();
+        while(this.hasNext()) {
+            String key = this.nextKey();
             if(!returnVal.containsKey(key)) {
                 returnVal.put(key, this.containerCreator.getList(dataType));
             }
 
             List<Object> current = (List<Object>) returnVal.get(key);
-            current.add(this.currentInstance.next());
+            current.add(this.next());
         }
 
         return returnVal;
@@ -128,34 +121,34 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
     global virtual Object toValue() {
         Object returnVal;
 
-        while(this.currentInstance.hasNext()) {
-            returnVal = this.currentInstance.next();
+        while(this.hasNext()) {
+            returnVal = this.next();
         }
 
         return returnVal;
     }
 
     global virtual Object first() {
-        return this.toValue();
+        return this.firstOrDefault(null);
     }
 
     global virtual Object firstOrDefault(Object defaultValue) {
 
-        if(this.currentInstance.hasNext()) {
-            return this.currentInstance.next();
+        if(this.hasNext()) {
+            return this.next();
         }
 
         return defaultValue;
     }
 
     global virtual Integer count() {
-        return this.currentInstance.toList(Object.class).size();
+        return this.toList(Object.class).size();
     }
 
     global virtual Boolean every(BooleanFunction matchingFunction) {
 
-        while(this.currentInstance.hasNext()) {
-            if(!matchingFunction.isTrueFor(this.currentInstance.next())) {
+        while(this.hasNext()) {
+            if(!matchingFunction.isTrueFor(this.next())) {
                 return false;
             }
         }
@@ -165,8 +158,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
     global virtual Boolean some(BooleanFunction matchingFunction) {
 
-        while(this.currentInstance.hasNext()) {
-            if(matchingFunction.isTrueFor(this.currentInstance.next())) {
+        while(this.hasNext()) {
+            if(matchingFunction.isTrueFor(this.next())) {
                 return true;
             }
         }
@@ -176,8 +169,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
     global virtual Object find(BooleanFunction matchingFunction) {
 
-        while(this.currentInstance.hasNext()) {
-            Object value = this.currentInstance.next();
+        while(this.hasNext()) {
+            Object value = this.next();
             if(matchingFunction.isTrueFor(value)) {
                 return value;
             }
@@ -192,8 +185,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
 
     /** @description method run all lazy iterators, but without returning value, so operation setup in advance must modyfi collection */
     global virtual void execute() {
-        while(this.currentInstance.hasNext()) {
-            this.currentInstance.next();
+        while(this.hasNext()) {
+            this.next();
         }
     }
 
@@ -218,6 +211,11 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
         return new LazyMapIterator(this, mappingFunction);
     }
 
+    /** @description transform every element using its position in the stream, counted from 0 */
+    global LazyIterator transformWithIndex(IndexedMapFunction mappingFunction) {
+        return new LazyMapWithIndexIterator(this, mappingFunction);
+    }
+
     global LazyIterator reduce(ReduceFunction reducingFunction) {
         return new LazyReduceIterator(this, reducingFunction);
     }
@@ -236,8 +234,12 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
         return this.transform(mappingFunction).flat();
     }
 
-    global LazyIterator groupBy(GroupByFunction grouppingFunction) {
-        return new LazyGroupByIterator(this, grouppingFunction);
+    /**
+     * @description split the stream into keyed groups. Returns the grouped type rather than LazyIterator,
+     * because after this step the stream carries groups, so a following filter filters groups.
+     */
+    global LazyGroupByIterator groupBy(GroupByFunction groupingFunction) {
+        return new LazyGroupByIterator(this, groupingFunction);
     }
 
     global LazyIterator sortBy(SortByFunction sortingFunction) {
@@ -267,16 +269,8 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
         return this.sortBy(SortUtil.SORTING_ORDER.ASCENDING);
     }
 
-    /**
-     * @descrition Apply data to current instance of iterator, so any operation can be done on that set of data, so already setup Lazy Iterator can be reused.
-     * @explanation General purpose of this method is to find first lazy iterator and replace its iterator field with current data iterator, so when one of method that evealuates lazy iterator will run, be executed on data passed as argument to apply instead of initialy applied data durring creation of first Lazy Iterator. Is not recommended to use on any Lazy Iterator that had initially passed data to iterate, because it might affect that.
-     */
-    global LazyIterator apply(Object data) {
-        return this.injector.injectData(instance(), data);
-    }
-
     global LazyIterator pipe(List<Object> functions) {
-        return this.injector.injectFunctions(instance(), functions);
+        return this.injector.injectFunctions(this, functions);
     }
 
     global LazyIterator take(Integer limitRecords) {
@@ -287,6 +281,12 @@ global virtual class LazyIterator implements Iterator<Object>, Iterable<Object> 
      */
     global LazyIterator query(QueryableFunction function) {
         return new LazyIterator(function.queryData(this.toList(Object.class)));
+    }
+
+    /** @description The string form of query(QueryableFunction), for a one-off query where a class would be ceremony. It wraps the SOQL in a SoqlQueryFunction, so it runs through the same path as a named one.
+     */
+    global LazyIterator query(String soql) {
+        return this.query(new SoqlQueryFunction(soql));
     }
 
     /** @description Method executes update dml that will interact with database. As a param it will get evaluated data from previous processing steps. As a return should provide data that were updated.

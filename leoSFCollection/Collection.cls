@@ -1,16 +1,39 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
 global inherited sharing class Collection {
 
-    global static LazyIterator nil() {
-        return new LazyIterator();
+    /**
+     * A pipeline with no source yet. Building one is a deliberate act, and it stays inert until apply()
+     * hands it data - a template is a step list, not a stream, so nothing runs against it until then.
+     */
+    global static TemplateIterator template() {
+        return new TemplateIterator();
     }
 
-    global static LazyIterator empty() {
-        return new LazyIterator(new List<Object>());
+    global static TemplateIterator template(List<Object> steps) {
+        return new TemplateIterator(steps);
     }
 
+    /**
+     * The source, whatever it is: a list, a set, an existing Iterator. A Map is accepted, but a map iterates
+     * over its keys - so of(someMap) hands you the keys and drops the values. When the map is already grouped
+     * and the values are the point, that is ofMap().
+     */
     global static LazyIterator of(Object anyInstance) {
+
+        if(anyInstance == null) {
+            throw new LeoSCollectionException('Collection.of(null) has no source to iterate; pass a list (an empty one is fine) or an Iterator.');
+        }
+
         return new LazyIterator(anyInstance);
+    }
+
+    /**
+     * A map that is already grouped: each entry is a key and its members. Nothing is bucketed here - the
+     * grouping exists already, so this is the way in when the map came from somewhere other than groupBy(),
+     * a payload, another pipeline's toListMap(), or a query result shaped by hand.
+     */
+    global static LazyGroupByIterator ofMap(Map<String, List<Object>> grouped) {
+        return new LazyGroupByIterator(grouped);
     }
 
     global static LazyIterator filter(Object anyInstance, BooleanFunction matchingFunction) {
@@ -21,6 +44,10 @@ global inherited sharing class Collection {
         return of(anyInstance).transform(mappingFunction);
     }
 
+    global static LazyIterator transformWithIndex(Object anyInstance, IndexedMapFunction mappingFunction) {
+        return of(anyInstance).transformWithIndex(mappingFunction);
+    }
+
     global static LazyIterator wrap(Object anyInstance, WrapperFunction wrapFunction) {
         return of(anyInstance).wrap(wrapFunction);
     }
@@ -29,8 +56,8 @@ global inherited sharing class Collection {
         return of(anyInstance).reduce(reducingFunction);
     }
 
-    global static LazyIterator groupBy(Object anyInstance, GroupByFunction grouppingFunction) {
-        return of(anyInstance).groupBy(grouppingFunction);
+    global static LazyGroupByIterator groupBy(Object anyInstance, GroupByFunction groupingFunction) {
+        return of(anyInstance).groupBy(groupingFunction);
     }
 
     global static LazyIterator flat(Object anyInstance) {
@@ -57,10 +84,15 @@ global inherited sharing class Collection {
         return of(anyInstance).pipe(functions);
     }
 
+    /** the query is the source, not a step over one: with no upstream rows to feed it, the function runs on nothing and its result becomes the pipeline */
     global static LazyIterator query(QueryableFunction function) {
-        return empty().query(function);
+        return new LazyIterator(function.queryData(new List<Object>()));
     }
-    
+
+    global static LazyIterator query(String soql) {
+        return query(new SoqlQueryFunction(soql));
+    }
+
     global static LazyIterator take(Object anyInstance, Integer limitRecords) {
         return of(anyInstance).take(limitRecords);
     }

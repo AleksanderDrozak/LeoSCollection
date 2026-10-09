@@ -1,5 +1,5 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
-global inherited sharing class NotFunction implements BooleanFunction, FilterUtil.BooleanFunctionAgregatorSingle {
+global inherited sharing class NotFunction implements BooleanFunction {
 
     private BooleanFunction functionToNegate;
 

@@ -9,11 +9,18 @@ public class LazyLimitIterator extends LazyIterator {
         this.currentIndex = 0;
     }
 
+    /** Idempotent: the counter advances in next(), never in hasNext(). */
     public override Boolean hasNext() {
-        if(this.limitFunction.shouldStop(this.currentIndex++)) {
+
+        if(this.limitFunction.shouldStop(this.currentIndex)) {
             return false;
         }
 
         return super.hasNext();
+    }
+
+    public override Object next() {
+        this.currentIndex++;
+        return super.next();
     }
 }

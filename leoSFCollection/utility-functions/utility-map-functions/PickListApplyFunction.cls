@@ -19,8 +19,12 @@ global inherited sharing virtual class PickListApplyFunction extends PickListByF
     }
 
     global override Object mapValue(SObject obj) {
+
+        /** an unpopulated relationship returns null, which must behave like an empty child list */
+        List<SObject> childRecords = (List<SObject>) super.mapValue(obj) ?? new List<SObject>();
+
         return this.transformToValueFunction.mapValue(
-            new LazyIterator((List<SObject>) super.mapValue(obj)).pipe(this.functions)
+            new LazyIterator(childRecords).pipe(this.functions)
         );
     }
 }

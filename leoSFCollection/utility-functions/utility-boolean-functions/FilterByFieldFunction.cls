@@ -1,50 +1,58 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
-global inherited sharing class FilterByFieldFunction {
+global inherited sharing class FilterByFieldFunction implements BooleanFunction {
 
-    global List<FilterByCondition> condtions = new List<FilterByCondition>();
-    
-    global String expression;
+    global class FilterByFieldFunctionException extends LeoSCollectionException {}
 
-    private static final FilterUtil.FilterExpressionTransformer EXPRESSION_TRANSFORMER = new FilterUtil.FilterExpressionTransformer(
-        new Map<FilterUtil.FilterJoinOperators, Type> {
-            FilterUtil.FilterJoinOperators.AND_OPERATOR => AndFunction.class,
-            FilterUtil.FilterJoinOperators.OR_OPERATOR => OrFunction.class,
-            FilterUtil.FilterJoinOperators.NOT_OPERATOR => NotFunction.class
-        }
-    );
-    
+    global List<FilterByCondition> conditions = new List<FilterByCondition>();
+
+    private BooleanFunction combined;
+
     global FilterByFieldFunction addFilterBy(FilterByCondition condition) {
-        this.condtions.add(condition);
+        this.conditions.add(condition);
+        this.combined = null;
         return this;
     }
 
     global FilterByFieldFunction addFilterBy(SObjectField field, ComparationUtil.Comparators comparator, Object compareTo) {
-        this.condtions.add(new FilterByCondition(field, comparator, compareTo));
+        this.conditions.add(new FilterByCondition(field, comparator, compareTo));
+        this.combined = null;
         return this;
     }
 
-    global FilterByFieldFunction setExpression(String expression) {
-        this.expression = expression;
+    /** by API name, so an AggregateResult alias can be filtered the same way a record field is */
+    global FilterByFieldFunction addFilterBy(String fieldName, ComparationUtil.Comparators comparator, Object compareTo) {
+        this.conditions.add(new FilterByCondition(fieldName, comparator, compareTo));
+        this.combined = null;
         return this;
     }
 
+    /** Conditions are combined with AND. For OR / NOT compose AndFunction, OrFunction and NotFunction directly. */
     global BooleanFunction evaluate() {
-        /** treat as all ANDs */
-        if(this.expression == null) {
-            this.setAndExpression();
+
+        if(this.conditions.isEmpty()) {
+            throw new FilterByFieldFunctionException('Cannot evaluate a filter without any condition added');
         }
 
-        return EXPRESSION_TRANSFORMER.evaluate(this.expression, this.condtions);
+        BooleanFunction returnVal = null;
+
+        for(FilterByCondition condition : this.conditions) {
+            if(returnVal == null) {
+                returnVal = condition;
+            } else {
+                returnVal = new AndFunction(returnVal, condition);
+            }
+        }
+
+        return returnVal;
     }
 
-    private void setAndExpression() {
- 
-        List<Integer> condtionsNumber = new List<Integer>();
+    /** so the class can be passed to filter() directly instead of requiring .evaluate() first; the chain is built once and cached */
+    global Boolean isTrueFor(Object obj) {
 
-        for(Integer value = 1; value <= this.condtions.size(); value++){
-            condtionsNumber.add(value);
+        if(this.combined == null) {
+            this.combined = this.evaluate();
         }
 
-        this.expression = String.join(condtionsNumber, ' AND ');
+        return this.combined.isTrueFor(obj);
     }
 }

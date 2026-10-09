@@ -1,0 +1,21 @@
+# Salesforce CLI
+.sf/
+.sfdx/
+.sfdk/
+.localdevserver/
+deploy-options.json
+
+# Node / LWC tooling
+node_modules/
+coverage/
+tests/apex/*-coverage.json
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

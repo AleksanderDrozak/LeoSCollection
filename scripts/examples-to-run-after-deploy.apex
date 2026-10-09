@@ -60,10 +60,10 @@ LazyIterator Iterator22 = new LazyIterator(accounts);
 LazyIterator Iterator23 = new LazyIterator(accounts);
 LazyIterator Iterator24 = new LazyIterator(accounts);
 
-System.debug(JSON.serializePretty(Iterator1.toListMap(Account.class)));
+System.debug(JSON.serializePretty(Iterator1.toList(Account.class)));
 System.debug(JSON.serializePretty(Iterator2.toList(Account.class)));
-System.debug(JSON.serializePretty(Iterator3.toMap(Integer.class)));
-System.debug(JSON.serializePretty(Iterator4.toMap(Integer.class)));
+System.debug(JSON.serializePretty(Iterator3.toList(Integer.class)));
+System.debug(Iterator4.toValue());
 System.debug(Iterator5.toValue());
 System.debug(JSON.serializePretty(Iterator6.toListMap(Account.class)));
 System.debug(Iterator7.some(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd()));
@@ -83,11 +83,9 @@ System.debug(
 
 System.debug(Iterator12.filter(
                  new FilterByFieldFunction()
-                 .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.EQUALS, 5)
                  .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 2)
                  .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 3)
                  .addFilterBy(Account.NumberOfEmployees, ComparationUtil.Comparators.NOT_EQUALS, 4)
-                 .setExpression('(1 AND 2) OR (3 AND 4)')
                  .evaluate()
 )
              .toList(Account.class)
@@ -120,13 +118,13 @@ System.debug(
 
 System.debug(
     Iterator17
-    .reduce(new SumFieldFunction(Account.NumberOfEmployees))
+    .reduce(ReduceFieldFunction.sum(Account.NumberOfEmployees))
     .toValue()
 );
 
 System.debug(
     Iterator18
-    .reduce(new AvarageFieldFunction(Account.NumberOfEmployees))
+    .reduce(ReduceFieldFunction.average(Account.NumberOfEmployees))
     .toValue()
 );
 
@@ -138,17 +136,17 @@ System.debug(
 
 System.debug(
     Iterator20
-    .reduce(new MinFieldFunction(Account.NumberOfEmployees))
+    .reduce(ReduceFieldFunction.min(Account.NumberOfEmployees))
     .toValue()
 );
 
 System.debug(
     Iterator21
-    .reduce(new MaxFieldFunction(Account.NumberOfEmployees))
+    .reduce(ReduceFieldFunction.max(Account.NumberOfEmployees))
     .toValue()
 );
 
-/** same implementation as for iterator 12 - its about 30% faster */
+/** iterator 22 builds the same OR-of-ANDs shape explicitly, without going through FilterByFieldFunction */
 System.debug(Iterator22.filter(
                  new AndFunction(
                      new AndFunction(
@@ -208,9 +206,6 @@ System.debug(Collection.of(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }).sortBy(Sor
 /** same here shorter without of function, using AnyComparator with descending order set by param */
 System.debug(Collection.sortBy(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }, new AnyComparator().setDescending()).toList(Integer.class));
 
-/** sorting logic for Lazy iterator (works from collection static also) with declared sorting function (faster then AnyComparator by 20%) with default descending order */
-System.debug(Collection.sortBy(new List<Integer> { 4, 3, 6, 1, 2, 5, 7 }, new NumberComparator().setDescending()).toList(Integer.class));
-
 System.debug(
     Collection.of(new List<Account> {
     new Account(Name ='NOT ACME', NumberOfEmployees = 4),
@@ -219,7 +214,7 @@ System.debug(
     new Account(Name ='ACME', NumberOfEmployees = 5),
     new Account(Name ='ACME', NumberOfEmployees = 1)
 })
-    .sortBy(new SortByFieldFunction(Account.NumberOfEmployees, Decimal.class))
+    .sortBy(new SortByFieldFunction(Account.NumberOfEmployees))
     .toList(Account.class)
 );
 
@@ -264,10 +259,11 @@ System.debug(
     ).toList(Contact.class)
 );
 
-LazyIterator reusableIterator = Collection.nil()
-                                .flat()
-                                .filter(new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd())
-                                .reduce(new SumNumberOnAccounts.SumNumberOfEmployees());
+TemplateIterator reusableIterator = Collection.template(new List<Object> {
+    new FlattenFunction(),
+    new FilterOddNumberOfAccountsIterator.NumberOfEmployeesIsOdd(),
+    new SumNumberOnAccounts.SumNumberOfEmployees()
+});
 
 System.debug(reusableIterator.apply(nestedAccounts).toValue());
 System.debug(reusableIterator.apply(nestedAccounts2).toValue());
@@ -371,7 +367,7 @@ System.debug(
 );
 
 System.debug(
-    Collection.empty()
+    Collection.of(new List<Account>())
     .firstOrDefault(accounts.get(0))
 );
 
@@ -413,7 +409,7 @@ System.debug(
     ),
     new SetValueFromFunction(
         Account.Phone,
-        new ReduceMapFunction(
+        new ComposeMapFunction(
             new PickByFieldFunction(Account.Phone),
             new RegexReplaceFunction(' ', '-')
         )
@@ -444,7 +440,7 @@ System.debug(
                       ComparationUtil.Comparators.EQUALS,
                       'Closed Won'
                   ),
-                  new SumFieldFunction(Opportunity.Amount) }
+                  ReduceFieldFunction.sum(Opportunity.Amount) }
             )
         )
     )

@@ -2,10 +2,10 @@
 global inherited sharing class MappedNumberOfEmployeesIterator {
 
     public static LazyIterator getInstance(Iterable<SObject> iterableInstance) {
-        return new LazyIterator(iterableInstance).transform(new NumberOfEmploeesValue());
+        return new LazyIterator(iterableInstance).transform(new NumberOfEmployeesValue());
     }
 
-    global inherited sharing class NumberOfEmploeesValue implements MapFunction {
+    global inherited sharing class NumberOfEmployeesValue implements MapFunction {
         global Object mapValue(Object acc){
             return mapValue((Account) acc);
         }

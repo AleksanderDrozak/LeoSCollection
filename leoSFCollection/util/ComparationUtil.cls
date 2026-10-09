@@ -15,7 +15,7 @@ global abstract class ComparationUtil {
         NOT_INCLUDES
     }
 
-    global class ComparationException extends Exception {}
+    global class ComparationException extends LeoSCollectionException {}
 
     global class CompareByInstance extends ComparatorBase {
         
@@ -23,9 +23,9 @@ global abstract class ComparationUtil {
             return compareFrom instanceof Comparable;
         }
 
+        /** Orderless natural distance: compareFrom against compareTo. Ordering is applied by the caller. */
         public override Integer compare(Object compareFrom, Object compareTo) {
-            /** wrap compareTo in compare base function to  */
-            return this.compare(((Comparable) compareTo).compareTo(compareFrom));
+            return ((Comparable) compareFrom).compareTo(compareTo);
         }
      }
     
@@ -36,8 +36,21 @@ global abstract class ComparationUtil {
         }
      }
 
+    /** Natural order, so a positive result means compareFrom is greater than compareTo. Nulls sort first. */
     global static Integer compare(Object compareFrom, Object compareTo) {
-        
+
+        if(compareFrom == null && compareTo == null) {
+            return 0;
+        }
+
+        if(compareFrom == null) {
+            return -1;
+        }
+
+        if(compareTo == null) {
+            return 1;
+        }
+
         if(BY_INSTANCE_COMPARATOR.isCompareByInstance(compareFrom)) {
             return BY_INSTANCE_COMPARATOR.compare(compareFrom, compareTo);
         }

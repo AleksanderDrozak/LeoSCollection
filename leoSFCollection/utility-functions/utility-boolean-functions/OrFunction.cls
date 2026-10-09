@@ -1,5 +1,5 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
-global inherited sharing class OrFunction implements BooleanFunction, FilterUtil.BooleanFunctionAgregatorDouble  {
+global inherited sharing class OrFunction implements BooleanFunction {
 
     private BooleanFunction functionToValidateA;
     private BooleanFunction functionToValidateB;

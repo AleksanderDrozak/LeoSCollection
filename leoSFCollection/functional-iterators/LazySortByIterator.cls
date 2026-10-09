@@ -1,37 +1,39 @@
 @SuppressWarnings('PMD.AvoidGlobalModifier')
 global class LazySortByIterator extends LazyIterator {
 
-    private SortByFunction sortingFunction;
+    private List<SortingWrapper> sortedWrappers;
+    private Integer position = 0;
 
+    /**
+     * The sort runs here, when sortBy() is called, rather than on the first read. A sort cannot emit anything
+     * before it has seen every element, so deferring the work bought nothing - it only moved the cost into
+     * hasNext(), where it turned up as a stall on an unrelated call. Sorting at the call makes the barrier the
+     * caller's decision instead of a surprise, and the stream that comes out is an ordinary one.
+     */
     public LazySortByIterator(Iterator<Object> iterator, SortByFunction sortingFunction) {
         super(iterator);
-        this.sortingFunction = sortingFunction;
-    }
 
-    global override LazyIterator instance() {
-        return this.instanceWithSortedData();
-    }
+        List<SortingWrapper> wrapped = new List<SortingWrapper>();
 
-    private LazyIterator instanceWithSortedData() {
-        final List<SortingWrapper> dataToSort = (List<SortingWrapper>) this.wrap(new SortingWrapper(this.sortingFunction)).toList(SortingWrapper.class);
-        dataToSort.sort();
-        return new LazySortWrapperIterator(dataToSort);
-    }
-
-    /** class to unpack value wrapped for sorting logic */
-    global class LazySortWrapperIterator extends LazyIterator {
-
-        public LazySortWrapperIterator(List<SortingWrapper> sortingWrappersList) {
-            super(sortingWrappersList);
+        while(iterator.hasNext()) {
+            wrapped.add(new SortingWrapper(iterator.next(), sortingFunction));
         }
 
-        global override Object next() {
-            SortingWrapper wrapper = (SortingWrapper) super.next();
-            return wrapper.value();
-        }
+        wrapped.sort();
+        this.sortedWrappers = wrapped;
     }
 
-    global inherited sharing class SortingWrapper implements Comparable, WrapperFunction {
+    global override Boolean hasNext() {
+        return this.position < this.sortedWrappers.size();
+    }
+
+    global override Object next() {
+        Object value = this.sortedWrappers[this.position].value();
+        this.position++;
+        return value;
+    }
+
+    global inherited sharing class SortingWrapper implements Comparable {
 
         private Object compareFrom;
         private SortByFunction sortingFunction;
@@ -41,20 +43,12 @@ global class LazySortByIterator extends LazyIterator {
             this.sortingFunction = sortingFunction;
         }
 
-        public SortingWrapper(SortByFunction sortingFunction) {
-            this.sortingFunction = sortingFunction;
-        }
-
         global Integer compareTo(Object compareTo) {
             return this.compareTo((SortingWrapper) compareTo);
         }
 
         global Integer compareTo(SortingWrapper compareTo) {
             return this.sortingFunction.compare(this.compareFrom, compareTo.value());
-        }
-
-        global Object wrap(Object data) {
-            return new SortingWrapper(data, this.sortingFunction);
         }
 
         Object value() {
